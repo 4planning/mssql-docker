@@ -1,0 +1,36 @@
+# https://mcr.microsoft.com/en-us/product/windows/servercore/about
+FROM mcr.microsoft.com/windows/servercore:ltsc2019-amd64
+
+LABEL maintainer "Maksym Sadovnychyy"
+
+# SQL Server 2019:
+# https://www.microsoft.com/en-us/download/confirmation.aspx?id=104781
+ENV sql_express_download_url https://download.microsoft.com/download/5/1/4/5145fe04-4d30-4b85-b0d1-39533663a2f1/SQL2022-SSEI-Expr.exe
+
+ENV sa_password="_" \
+    attach_dbs="[]" \
+    ACCEPT_EULA="_" \
+    sa_password_path="C:\ProgramData\Docker\secrets\sa-password"
+
+SHELL ["powershell", "-Command", "$ErrorActionPreference = 'Stop'; $ProgressPreference = 'SilentlyContinue';"]
+
+# make install files accessible
+COPY start.ps1 /
+
+WORKDIR /
+
+# Download online installer and download offline installer
+RUN Invoke-WebRequest -Uri $env:sql_express_download_url -OutFile SQL2022-SSEI-Expr.exe ; \
+        Start-Process -Wait -FilePath .\SQL2022-SSEI-Expr.exe -ArgumentList /ACTION=Download, LANGUAGE=en-US, MEDIAPATH=C:\offline, /MEDIATYPE=Core, /QUIET
+
+# Extract and install from offline installer
+RUN Start-Process -Wait -FilePath .\offline\SQLEXPR_x64_ENU.exe -ArgumentList /q, /x:C:\offline\setup ; \
+        .\offline\setup\setup.exe /q /ACTION=Install /INSTANCENAME=SQLEXPRESS /FEATURES=SQLEngine /UPDATEENABLED=0 /SQLSVCACCOUNT='NT AUTHORITY\System' /SQLSYSADMINACCOUNTS='BUILTIN\ADMINISTRATORS' /TCPENABLED=1 /NPENABLED=0 /IACCEPTSQLSERVERLICENSETERMS ; \
+        Remove-Item -Recurse -Force SQL2022-SSEI-Expr.exe, offline
+
+RUN stop-service MSSQL`$SQLEXPRESS ; \
+        set-itemproperty -path 'HKLM:\software\microsoft\microsoft sql server\mssql16.SQLEXPRESS\mssqlserver\supersocketnetlib\tcp\ipall' -name tcpdynamicports -value '' ; \
+        set-itemproperty -path 'HKLM:\software\microsoft\microsoft sql server\mssql16.SQLEXPRESS\mssqlserver\supersocketnetlib\tcp\ipall' -name tcpport -value 1433 ; \
+        set-itemproperty -path 'HKLM:\software\microsoft\microsoft sql server\mssql16.SQLEXPRESS\mssqlserver\' -name LoginMode -value 2 ;
+
+CMD .\start -sa_password $env:sa_password -ACCEPT_EULA $env:ACCEPT_EULA -attach_dbs \"$env:attach_dbs\" -Verbose
